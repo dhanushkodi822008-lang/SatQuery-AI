@@ -283,7 +283,7 @@ async function onAsk() {
     UI.hideProgress();
   }
 }
-}
+
 
 async function onReport() {
   if (!lastAnalysis) {

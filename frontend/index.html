@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SatQuery AI — SIH 26167</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/map.css" />
+<style>
+#chat-panel { display:flex; flex-direction:column; max-height:420px; border:1px solid var(--border,#334); border-radius:10px; background:var(--panel,#0f172a); margin-top:10px; }
+#chat-messages { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:8px; min-height:180px; }
+.chat-bubble { max-width:92%; padding:8px 12px; border-radius:12px; font-size:0.92rem; line-height:1.4; white-space:pre-wrap; }
+.chat-bubble.user { align-self:flex-end; background:#2563eb; color:#fff; border-bottom-right-radius:4px; }
+.chat-bubble.assistant { align-self:flex-start; background:#1e293b; color:#e2e8f0; border-bottom-left-radius:4px; border:1px solid #334155; }
+.chat-meta { font-size:0.75rem; opacity:0.7; margin-top:4px; }
+#chat-input-row { display:flex; gap:6px; padding:8px; border-top:1px solid #334155; }
+#chat-input { flex:1; resize:none; border-radius:8px; padding:8px; background:#0b1220; color:#e2e8f0; border:1px solid #334155; }
+.evidence-chip { display:inline-block; background:#0ea5e933; color:#7dd3fc; padding:2px 8px; border-radius:999px; font-size:0.72rem; margin:2px 2px 0 0; }
+</style>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">SatQuery AI</span>
+        <span class="badge">SIH26167 · REAL DATA MODE</span>
+      </div>
+      <div id="data-status" class="status-pill">INITIALIZING</div>
+    </header>
+
+    <div class="layout">
+      <!-- LEFT SIDEBAR -->
+      <aside class="sidebar left">
+        <section>
+          <h3>Location</h3>
+          <div class="search-row">
+            <input id="location-input" type="text" placeholder="Place, district, river, or lat, lon"
+                   value="" />
+            <button id="btn-locate" class="btn primary">Go</button>
+          </div>
+          <div id="location-search-status" class="search-status" aria-live="polite"></div>
+          <p class="hint">Enter a city, town, village, district, landmark, address, or coordinates.</p>
+          <div id="location-info" class="info-card hidden">
+            <div><strong id="loc-name">—</strong></div>
+            <div>Lat: <span id="loc-lat">—</span> · Lon: <span id="loc-lon">—</span></div>
+            <div>AOI ≈ <span id="loc-aoi">—</span> km²</div>
+            <div class="src">Source: <span id="loc-src">—</span></div>
+          </div>
+        </section>
+
+        <section class="upload-panel">
+          <h3>Upload Satellite Image</h3>
+          <input id="image-file-input" type="file" accept=".tif,.tiff,image/tiff" />
+          <div class="upload-actions">
+            <button id="btn-upload-image" class="btn primary">Upload Satellite Image</button>
+          </div>
+          <div id="upload-file-name" class="upload-file-name">No file selected</div>
+          <div id="upload-status" class="upload-status"></div>
+          <div id="image-metadata" class="info-card hidden"></div>
+        </section>
+
+        <section>
+          <h3>Land Use / Land Cover</h3>
+          <div class="landcover-section">
+            <div class="category-picker">
+              <button type="button" class="landcover-btn active" data-category="Water">Water</button>
+              <button type="button" class="landcover-btn" data-category="Agriculture">Agriculture</button>
+              <button type="button" class="landcover-btn" data-category="Forest / Vegetation">Forest / Vegetation</button>
+              <button type="button" class="landcover-btn" data-category="Built-up">Built-up</button>
+            </div>
+            <div class="btn-row">
+              <button id="btn-analyze-landcover" class="btn primary">Analyze</button>
+              <button id="btn-clear-landcover" class="btn">Clear overlay</button>
+            </div>
+            <div id="landcover-status" class="upload-status"></div>
+            <div id="landcover-summary" class="info-card hidden"></div>
+          </div>
+        </section>
+
+        <section>
+          <h3>Map layers</h3>
+          <label class="layer-toggle"><input type="checkbox" id="ly-aoi" checked /> AOI boundary</label>
+          <label class="layer-toggle"><input type="checkbox" id="ly-osm-water" checked /> OSM water features</label>
+          <label class="layer-toggle"><input type="checkbox" id="ly-marker" checked /> Location marker</label>
+          <label class="layer-toggle"><input type="checkbox" id="ly-landcover" checked /> Land-cover overlay</label>
+          <label class="layer-toggle"><input type="checkbox" id="ly-detection-water" checked /> Detected water</label>
+          <label class="layer-toggle"><input type="checkbox" id="ly-detection-vegetation" checked /> Detected vegetation</label>
+          <label class="layer-toggle"><input type="checkbox" id="ly-detection-builtup" checked /> Detected built-up</label>
+          <div class="opacity-row">
+            <span>Overlay opacity</span>
+            <input type="range" id="overlay-opacity" min="0" max="100" value="70" />
+          </div>
+        </section>
+
+        <section>
+          <h3>Data sources</h3>
+          <ul class="src-list">
+            <li>Geocoding: Nominatim (OSM)</li>
+            <li>Satellite: Planetary Computer STAC</li>
+            <li>Weather: Open-Meteo</li>
+            <li>Water names: OSM Overpass</li>
+            <li>Gauge levels: not connected</li>
+          </ul>
+        </section>
+
+        <section class="sih-panel">
+          <h3>SIH Requirement Status</h3>
+          <ul id="sih-status" class="sih-list"></ul>
+        </section>
+      </aside>
+
+      <!-- CENTER MAP -->
+      <main class="map-wrap">
+        <div class="map-toolbar" aria-label="Map area selection controls">
+          <button id="btn-select-area" class="btn primary">🖊️ Select Area</button>
+          <button id="btn-finish-area" class="btn hidden">✅ Finish</button>
+          <button id="btn-cancel-area" class="btn hidden">❌ Cancel</button>
+          <button id="btn-clear-area" class="btn">🗑️ Clear Area</button>
+          <span id="area-status" class="area-status">Draw an area on the map</span>
+        </div>
+        <div id="map"></div>
+        <div id="progress" class="progress hidden">
+          <div class="progress-bar"></div>
+          <span id="progress-text">Working…</span>
+        </div>
+        <div class="map-legend">
+          <div><span class="swatch aoi"></span> AOI</div>
+          <div><span class="swatch water"></span> OSM water</div>
+          <div><span class="swatch marker"></span> Location</div>
+          <div id="landcover-legend" class="landcover-legend hidden"><span id="landcover-legend-swatch" class="swatch landcover"></span> <span id="landcover-legend-label">Land-cover</span></div>
+        </div>
+      </main>
+
+      <!-- RIGHT PANEL -->
+      <aside class="sidebar right">
+        <section>
+                    <h3>Ask SatQuery AI</h3>
+          <div id="chat-panel">
+            <div id="chat-messages"></div>
+            <div id="chat-input-row">
+              <textarea id="question-input" rows="2" placeholder="Ask about water, vegetation, change, flood risk… (multi-turn chat)"></textarea>
+              <button id="btn-ask" class="btn primary">Send</button>
+            </div>
+          </div>
+          <div class="example-chips" style="margin-top:8px">
+            <button id="btn-report" class="btn">Report</button>
+          </div>
+          <div class="quick-qs">
+            <button class="chip" data-q="Show water bodies in this area">Water bodies</button>
+            <button class="chip" data-q="What is today's rainfall?">Rainfall</button>
+            <button class="chip" data-q="Is there flood risk based on rainfall and water extent?">Flood risk</button>
+            <button class="chip" data-q="What changed between 2024 and 2025?">Change 2024–2025</button>
+            <button class="chip" data-q="Use optical and SAR together">Optical + SAR</button>
+            <button class="chip" data-q="What is the latest available water-level observation?">Water level</button>
+            <button class="chip" data-q="How much agricultural land is there?">Agriculture</button>
+            <button class="chip" data-q="Describe this satellite image">Caption</button>
+          </div>
+        </section>
+
+        <section id="answer-panel" class="answer-panel">
+          <h3>Answer</h3>
+          <div id="answer-text" class="answer-body">Search a location, then ask a question.</div>
+          <div id="metrics" class="metrics"></div>
+          <div id="freshness" class="freshness"></div>
+          <div id="sources" class="sources"></div>
+          <div id="confidence" class="confidence"></div>
+        </section>
+
+        <section>
+          <h3>Execution trace</h3>
+          <ol id="trace" class="trace"></ol>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/map.js"></script>
+  <script src="/js/ui.js"></script>
+  <script src="/js/query.js"></script>
+  <script src="/js/charts.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

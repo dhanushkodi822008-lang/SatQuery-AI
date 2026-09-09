@@ -1,0 +1,203 @@
+/* District Overview Dashboard — extends existing dark theme tokens */
+
+.dashboard-app { height: 100vh; display: flex; flex-direction: column; }
+
+.dash-nav { display: flex; gap: 1rem; }
+.dash-nav a {
+  color: var(--muted); text-decoration: none; font-weight: 600; font-size: 0.9rem;
+  padding: 0.3rem 0.6rem; border-radius: 6px;
+}
+.dash-nav a.active, .dash-nav a:hover { color: var(--text); background: var(--panel2); }
+
+.topbar-right { display: flex; align-items: center; gap: 0.75rem; }
+.icon-btn { position: relative; padding: 0.4rem 0.7rem; }
+.badge-count {
+  position: absolute; top: -4px; right: -4px;
+  background: var(--danger); color: #fff; font-size: 0.65rem;
+  min-width: 16px; height: 16px; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.dash-layout {
+  display: grid;
+  grid-template-columns: 40% 60%;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+@media (max-width: 900px) {
+  .dash-layout { grid-template-columns: 1fr; overflow-y: auto; }
+}
+
+.dash-left {
+  display: flex; flex-direction: column; border-right: 1px solid var(--border);
+  min-height: 0; overflow: hidden;
+}
+.dash-right {
+  overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 1rem;
+}
+
+.map-wrap { position: relative; flex: 1; min-height: 280px; }
+#dash-map { width: 100%; height: 100%; background: #0a0f1a; }
+.map-float-btns {
+  position: absolute; top: 10px; right: 10px; z-index: 1000;
+  display: flex; gap: 0.4rem; flex-wrap: wrap;
+}
+
+.card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem;
+}
+.card h3 { margin: 0 0 0.75rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.card h4 { margin: 0.75rem 0 0.4rem; font-size: 0.9rem; }
+
+.composition-card { flex-shrink: 0; }
+.composition-body { display: flex; align-items: center; gap: 1rem; position: relative; flex-wrap: wrap; }
+.donut-center {
+  position: absolute; left: 90px; top: 50%; transform: translate(-50%, -50%);
+  text-align: center; font-weight: 700; font-size: 0.95rem; pointer-events: none;
+}
+.legend { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+.legend li { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.3rem; }
+.legend .swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+
+.overview-header {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap;
+}
+.overview-header h1 { margin: 0; font-size: 1.4rem; }
+.overview-header .meta { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.9rem; }
+.header-actions { display: flex; gap: 0.5rem; }
+
+.stat-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;
+}
+.stat-card {
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0.9rem;
+}
+.stat-card .stat-icon { font-size: 1.3rem; }
+.stat-card .stat-label { font-size: 0.75rem; color: var(--muted); margin: 0.2rem 0; }
+.stat-card .stat-pct { font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+.stat-card .stat-sub { font-size: 0.8rem; color: var(--muted); }
+.stat-card.agriculture .stat-pct { color: #22c55e; }
+.stat-card.builtup .stat-pct { color: #ef4444; }
+.stat-card.water .stat-pct { color: #3b82f6; }
+.stat-card.other .stat-pct { color: #94a3b8; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { padding: 0.5rem 0.6rem; text-align: left; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; }
+td.empty, li.empty { color: var(--muted); font-style: italic; }
+.arrow-up { color: #22c55e; }
+.arrow-down { color: #ef4444; }
+
+.change-list { list-style: none; margin: 0; padding: 0; }
+.change-list li {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.55rem 0; border-bottom: 1px solid var(--border);
+}
+.change-thumb {
+  width: 48px; height: 48px; border-radius: 6px; background: var(--panel2);
+  border: 1px solid var(--border); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 0.7rem; color: var(--muted);
+}
+.change-meta { flex: 1; }
+.change-meta .cls { font-weight: 600; }
+.change-meta .delta { font-size: 0.85rem; color: var(--muted); }
+
+/* Risk engine */
+.hazard-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
+.hazard-chip {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.35rem 0.7rem; border-radius: 999px;
+  background: var(--panel2); border: 1px solid var(--border);
+  font-size: 0.8rem; cursor: pointer; color: var(--text);
+}
+.hazard-chip.active { border-color: var(--accent); background: #1e3a5f; }
+.hazard-chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.severity-row { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
+.severity-label {
+  font-size: 1.5rem; font-weight: 800; letter-spacing: 0.04em;
+  padding: 0.3rem 0.8rem; border-radius: 8px;
+}
+.severity-label.LOW { background: #0f3d2e; color: #6ee7b7; }
+.severity-label.MODERATE { background: #3b2f0b; color: #fcd34d; }
+.severity-label.HIGH { background: #3b1f0b; color: #fb923c; }
+.severity-label.SEVERE { background: #3b1111; color: #fca5a5; }
+
+.explanation { color: var(--muted); font-size: 0.9rem; line-height: 1.45; }
+
+.factor-list { list-style: none; margin: 0; padding: 0; }
+.factor-list li {
+  display: flex; justify-content: space-between; gap: 0.5rem;
+  padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: 0.85rem;
+}
+.factor-list .rating { font-weight: 600; }
+.factor-list .rating.High { color: #ef4444; }
+.factor-list .rating.Moderate { color: #f59e0b; }
+.factor-list .rating.Low { color: #22c55e; }
+.factor-list .rating.Unavailable { color: var(--muted); }
+
+.composite-card {
+  margin-top: 1rem; padding: 0.75rem; background: var(--panel2);
+  border-radius: 8px; border: 1px solid var(--border);
+}
+.composite-top { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
+.composite-pill {
+  font-size: 0.75rem; padding: 0.25rem 0.55rem; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--border);
+}
+
+/* Alerts form */
+.alert-form {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-bottom: 0.5rem;
+}
+.alert-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--muted); }
+.alert-form select {
+  background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 0.4rem;
+}
+
+/* Notification panel */
+.notif-panel {
+  position: fixed; top: 56px; right: 12px; width: 340px; max-height: 70vh;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  z-index: 2000; box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+  display: flex; flex-direction: column;
+}
+.notif-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border);
+}
+.notif-list { overflow-y: auto; padding: 0.5rem; }
+.notif-item {
+  padding: 0.6rem; border-radius: 8px; margin-bottom: 0.4rem;
+  background: var(--panel2); border-left: 3px solid var(--accent); cursor: pointer;
+}
+.notif-item.unread { border-left-color: var(--danger); }
+.notif-item .n-title { font-weight: 600; font-size: 0.85rem; }
+.notif-item .n-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+
+/* Modal */
+.modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; z-index: 3000;
+}
+.modal.hidden, .hidden { display: none !important; }
+.modal-content {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  width: min(640px, 94vw); max-height: 85vh; overflow-y: auto; padding: 1.25rem;
+}
+.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+.modal-header h2 { margin: 0; font-size: 1.2rem; }
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 24px; right: 24px; z-index: 4000;
+  background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+  padding: 0.75rem 1.1rem; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  font-size: 0.9rem; max-width: 320px;
+}
+.toast.severe { border-color: var(--danger); }

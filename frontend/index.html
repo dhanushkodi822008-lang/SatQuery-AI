@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SatQuery AI — Remote Sensing & Earth Observation Platform</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="/css/map.css" />
+  <link rel="stylesheet" href="/css/app-pages.css" />
+  <link rel="stylesheet" href="/css/chatbot.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <button id="btn-menu" class="btn-menu" aria-label="Open menu" title="Menu">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="brand">
+        <span class="logo">SatQuery AI</span>
+        <span class="badge">SIH26167 · REAL DATA</span>
+      </div>
+      <div id="data-status" class="status-pill">INITIALIZING</div>
+    </header>
+
+    <div id="nav-overlay" class="nav-overlay" hidden></div>
+    <nav id="main-nav" class="main-nav" aria-label="Main navigation">
+      <div class="nav-header">
+        <span class="logo">SatQuery AI</span>
+        <button id="btn-close-nav" class="btn-close-nav" aria-label="Close menu">×</button>
+      </div>
+      <ul class="nav-list">
+        <li><a href="#dashboard" data-page="dashboard" class="nav-link active">Dashboard</a></li>
+        <li><a href="#satellite" data-page="satellite" class="nav-link">SatQuery Analysis</a></li>
+        <li><a href="#area-overview" data-page="area-overview" class="nav-link">Area Overview</a></li>
+        <li><a href="#change" data-page="change" class="nav-link">Change Prediction</a></li>
+        <li><a href="#monitoring" data-page="monitoring" class="nav-link">Monitoring & Alerting</a></li>
+        <li><a href="#reports" data-page="reports" class="nav-link">Data & Reports</a></li>
+        <li><a href="#settings" data-page="settings" class="nav-link">Settings</a></li>
+      </ul>
+    </nav>
+
+    <main id="page-container">
+
+      <!-- 1. DASHBOARD -->
+      <section id="page-dashboard" class="page active" data-page="dashboard">
+        <div class="page-header">
+          <h1>Dashboard</h1>
+          <p class="page-sub">Global active location, real administrative boundary, and manual AOI definition</p>
+        </div>
+        <div class="loc-bar">
+          <input id="dash-loc-input" type="text" placeholder="Search place name or enter coordinates (e.g. Namakkal District or 11.2189, 78.1674)…" autocomplete="off" />
+          <button id="dash-btn-go" class="btn primary">Find Location</button>
+        </div>
+        <div id="dash-loc-info" class="loc-info">No location selected</div>
+        <div class="map-tools">
+          <button id="dash-btn-draw" class="btn">Draw AOI</button>
+          <button id="dash-btn-finish" class="btn">Finish AOI</button>
+          <button id="dash-btn-boundary" class="btn">Use Real Boundary</button>
+          <button id="dash-btn-clear" class="btn">Clear AOI</button>
+          <span id="dash-area-status" class="area-status"></span>
+        </div>
+        <div class="map-container large">
+          <div id="map-dashboard" class="map-el"></div>
+        </div>
+      </section>
+
+      <!-- 2. SATQUERY ANALYSIS -->
+      <section id="page-satellite" class="page" data-page="satellite">
+        <div class="page-header">
+          <h1>SatQuery Analysis</h1>
+          <p class="page-sub">Real Sentinel-2 / Landsat STAC scenes, multispectral GeoTIFF & RGB image upload</p>
+        </div>
+        <div class="loc-bar">
+          <input id="sat-loc-input" type="text" placeholder="Search place or coordinates…" autocomplete="off" />
+          <button id="sat-btn-go" class="btn primary">Find Location</button>
+        </div>
+        <div id="sat-loc-info" class="loc-info">No location selected</div>
+        <div class="map-tools">
+          <button id="sat-btn-draw" class="btn">Draw AOI</button>
+          <button id="sat-btn-finish" class="btn">Finish AOI</button>
+          <button id="sat-btn-clear" class="btn">Clear AOI</button>
+          <span id="sat-area-status" class="area-status"></span>
+        </div>
+        <div class="split-layout">
+          <div class="map-container medium">
+            <div id="map-satellite" class="map-el"></div>
+          </div>
+          <div class="panel-col">
+            <div class="card">
+              <h3>Satellite Scene Search</h3>
+              <label>Date <input id="sat-date" type="date" /></label>
+              <label>Cloud Cover % <input id="sat-cloud" type="number" min="0" max="100" value="30" /></label>
+              <label>Data Type
+                <select id="sat-dtype">
+                  <option value="optical">Optical (Sentinel-2 / Landsat)</option>
+                  <option value="sar">SAR (Sentinel-1)</option>
+                  <option value="both">Optical + SAR Fusion</option>
+                </select>
+              </label>
+              <button id="sat-btn-search" class="btn primary">Search Scene</button>
+              <div id="sat-scene-results" class="scene-results"></div>
+            </div>
+            <div class="card">
+              <h3>Image Upload & Analysis</h3>
+              <p class="hint">Accepts GeoTIFF, TIFF, JPG, JPEG, PNG, WEBP. Automatically detects analysis mode.</p>
+              <input id="sat-upload" type="file" accept=".tif,.tiff,image/tiff,.png,.jpg,.jpeg,.webp" />
+              <img id="sat-image-preview" class="image-preview hidden" alt="Uploaded satellite image preview" />
+              <div id="sat-upload-status" class="upload-status"></div>
+              <button id="sat-btn-analyze" class="btn primary" disabled>Analyze Image</button>
+              <div id="sat-analyze-result" class="result-box"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. AREA OVERVIEW -->
+      <section id="page-area-overview" class="page" data-page="area-overview">
+        <div class="page-header">
+          <h1>Area Overview</h1>
+          <p class="page-sub">Land categories and surface extent for the active AOI</p>
+        </div>
+        <div class="loc-bar">
+          <input id="ao-loc-input" type="text" placeholder="Search location or coordinates…" autocomplete="off" />
+          <button id="ao-btn-go" class="btn primary">Find Location</button>
+        </div>
+        <div id="ao-loc-info" class="loc-info">No location selected</div>
+        <div class="map-tools">
+          <button id="ao-btn-draw" class="btn">Draw AOI</button>
+          <button id="ao-btn-finish" class="btn">Finish AOI</button>
+          <button id="ao-btn-clear" class="btn">Clear AOI</button>
+          <span id="ao-area-status" class="area-status"></span>
+        </div>
+        <div class="map-container medium" style="position:relative;">
+          <div id="map-area" class="map-el"></div>
+          <div class="map-legend" id="ao-map-legend">
+            <div class="legend-title">Area Overview Legend</div>
+            <div class="legend-item"><span class="swatch" style="background:#0284c7;"></span> Water Bodies (NDWI)</div>
+            <div class="legend-item"><span class="swatch" style="background:#84cc16;"></span> Agricultural Land (NDVI)</div>
+            <div class="legend-item"><span class="swatch" style="background:#f97316;"></span> Built-up Area (NDBI)</div>
+            <div class="legend-item"><span class="swatch" style="background:#15803d;"></span> Forest & Canopy</div>
+          </div>
+        </div>
+        <div class="category-picker" id="ao-category-picker" aria-label="Land-cover analysis category">
+          <button type="button" class="landcover-btn active" data-cat="overall">Overall Measurement</button>
+          <button type="button" class="landcover-btn" data-cat="water">Water Bodies (NDWI)</button>
+          <button type="button" class="landcover-btn" data-cat="agri">Agricultural Land (NDVI)</button>
+          <button type="button" class="landcover-btn" data-cat="builtup">Built-up Area (NDBI)</button>
+          <button type="button" class="landcover-btn" data-cat="forest">Forest & Canopy</button>
+        </div>
+        <div class="category-grid" id="ao-categories">
+          <div class="cat-card" data-cat="water">
+            <div class="cat-label">Water Bodies</div>
+            <div class="cat-value" id="cat-water">—</div>
+            <div class="cat-sub">sq ft</div>
+          </div>
+          <div class="cat-card" data-cat="builtup">
+            <div class="cat-label">Built-up Area</div>
+            <div class="cat-value" id="cat-builtup">—</div>
+            <div class="cat-sub">sq ft</div>
+          </div>
+          <div class="cat-card" data-cat="forest">
+            <div class="cat-label">Forest / Canopy</div>
+            <div class="cat-value" id="cat-forest">—</div>
+            <div class="cat-sub">sq ft</div>
+          </div>
+          <div class="cat-card" data-cat="agri">
+            <div class="cat-label">Agricultural Land</div>
+            <div class="cat-value" id="cat-agri">—</div>
+            <div class="cat-sub">sq ft</div>
+          </div>
+        </div>
+        <div id="ao-status" class="info-msg">Select a location and run analysis, or upload imagery on SatQuery Analysis.</div>
+        <div id="ao-individual-result" class="result-box"></div>
+      </section>
+
+      <!-- 4. CHANGE PREDICTION -->
+      <section id="page-change" class="page" data-page="change">
+        <div class="page-header">
+          <h1>Change Prediction</h1>
+          <p class="page-sub">Bi-temporal satellite change detection and historical trend forecasting</p>
+        </div>
+        <div class="loc-bar">
+          <input id="ch-loc-input" type="text" placeholder="Search location or coordinates…" autocomplete="off" />
+          <button id="ch-btn-go" class="btn primary">Find Location</button>
+        </div>
+        <div id="ch-loc-info" class="loc-info">No location selected</div>
+        <div class="map-tools">
+          <button id="ch-btn-draw" class="btn">Draw AOI</button>
+          <button id="ch-btn-finish" class="btn">Finish AOI</button>
+          <button id="ch-btn-clear" class="btn">Clear AOI</button>
+          <span id="ch-area-status" class="area-status"></span>
+        </div>
+        <div class="map-container medium">
+          <div id="map-change" class="map-el"></div>
+        </div>
+        <div class="card">
+          <h3>Comparison Type</h3>
+          <div class="compare-type-selector" id="compare-type-selector">
+            <button type="button" class="cmp-type active" data-type="date">DATE</button>
+            <button type="button" class="cmp-type" data-type="year">YEAR</button>
+            <button type="button" class="cmp-type" data-type="images">IMAGES</button>
+          </div>
+          <div id="cmp-inputs-date" class="cmp-inputs">
+            <label>Date A <input id="cmp-date-a" type="date" /></label>
+            <label>Date B <input id="cmp-date-b" type="date" /></label>
+          </div>
+          <div id="cmp-inputs-year" class="cmp-inputs" style="display:none">
+            <label>Year A <input id="cmp-year-a" type="number" min="2015" max="2030" placeholder="e.g. 2020" /></label>
+            <label>Year B <input id="cmp-year-b" type="number" min="2015" max="2030" placeholder="e.g. 2024" /></label>
+          </div>
+          <div id="cmp-inputs-images" class="cmp-inputs" style="display:none">
+            <label>Before Image <input id="cmp-before" type="file" accept=".tif,.tiff,image/tiff,.png,.jpg,.jpeg,.webp" /></label>
+            <label>After Image <input id="cmp-after" type="file" accept=".tif,.tiff,image/tiff,.png,.jpg,.jpeg,.webp" /></label>
+          </div>
+          <button id="cmp-btn-compare" class="btn primary">Compare Changes</button>
+          <div id="cmp-result" class="result-box"></div>
+        </div>
+      </section>
+
+      <!-- 5. MONITORING & ALERTING -->
+      <section id="page-monitoring" class="page" data-page="monitoring">
+        <div class="page-header">
+          <h1>Monitoring & Alerting</h1>
+          <p class="page-sub">Automated satellite hazard monitoring and in-app alert notifications</p>
+        </div>
+        <p class="info-line">Monitors active AOI with scheduled satellite checks. Real notifications appear instantly as in-app overlays and browser notifications.</p>
+        
+        <div class="card">
+          <h3>In-App Notification Test</h3>
+          <p class="hint">Test the in-app alert and browser notification engine immediately.</p>
+          <button id="mon-btn-direct-test" class="btn primary">Test Alert</button>
+          <div id="mon-direct-test-status" class="result-box"></div>
+        </div>
+
+        <div class="card">
+          <h3>Create Monitoring Rule</h3>
+          <label>Location / AOI Name <input id="mon-loc-name" type="text" placeholder="e.g. Namakkal District" /></label>
+          <label>Monitored Condition
+            <select id="mon-condition">
+              <option value="ndwi_high">High water extent / Flood risk (NDWI)</option>
+              <option value="ndvi_drop">Vegetation stress / Deforestation (NDVI)</option>
+              <option value="flood_risk">Flood risk elevated</option>
+              <option value="change_detected">Significant landcover change</option>
+            </select>
+          </label>
+          <label>Risk Threshold <input id="mon-threshold" type="number" step="0.01" value="0.3" /></label>
+          <button id="mon-btn-create" class="btn primary">Create Rule</button>
+          <div id="mon-create-status" class="result-box"></div>
+        </div>
+
+        <div class="card">
+          <h3>Active Monitoring Rules</h3>
+          <div id="mon-rules-list" class="rules-list">Loading rules…</div>
+          <button id="mon-btn-refresh" class="btn">Refresh Rules</button>
+        </div>
+
+        <div class="card">
+          <h3>Alert History</h3>
+          <p class="hint">Chronological log of TEST notifications and REAL detected risk events.</p>
+          <div id="mon-alert-history" class="history-list">Loading alert history…</div>
+          <button id="mon-btn-clear-history" class="btn" style="margin-top:8px;">Clear History</button>
+        </div>
+      </section>
+
+      <!-- 6. DATA & REPORTS -->
+      <section id="page-reports" class="page" data-page="reports">
+        <div class="page-header">
+          <h1>Data & Reports</h1>
+          <p class="page-sub">Geospatial analysis history and structured PDF reports</p>
+        </div>
+        <div class="card">
+          <h3>Analysis History</h3>
+          <div id="reports-history" class="history-list">No analyses yet. Complete an analysis on Dashboard or SatQuery Analysis first.</div>
+          <button id="reports-btn-refresh" class="btn">Refresh History</button>
+        </div>
+        <div class="card">
+          <h3>Generate Report</h3>
+          <label>Analysis ID / Key <input id="reports-id" type="text" placeholder="From history above" /></label>
+          <button id="reports-btn-generate" class="btn primary">Generate Report</button>
+          <div id="reports-preview" class="result-box"></div>
+          <a id="reports-download" class="btn" style="display:none" download>Download PDF Report</a>
+        </div>
+      </section>
+
+      <!-- 7. SETTINGS -->
+      <section id="page-settings" class="page" data-page="settings">
+        <div class="page-header">
+          <h1>Settings</h1>
+          <p class="page-sub">System configuration, base maps, AI models, and notification preferences</p>
+        </div>
+        <div class="card">
+          <h3>General & Language</h3>
+          <p class="hint">Application language: <strong>English (Only)</strong></p>
+          <div class="setting-row">
+            <span class="badge">English (EN)</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Appearance & Base Map</h3>
+          <div class="setting-row">
+            <label>Theme: </label>
+            <button type="button" class="theme-btn" data-theme="light">Light Mode</button>
+            <button type="button" class="theme-btn active" data-theme="dark">Dark Mode</button>
+          </div>
+          <div class="setting-row" style="margin-top:12px;">
+            <label>Default Base Map: </label>
+            <button type="button" class="basemap-btn" data-basemap="satellite">Satellite Imagery</button>
+            <button type="button" class="basemap-btn" data-basemap="default">OpenStreetMap Default</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>AI & Vision Language Model</h3>
+          <p class="hint">Powered by Groq 120B / OpenAI-compatible API and 2,297-item Earth Observation Knowledge Engine.</p>
+          <div class="setting-row">
+            <span class="badge">Model: openai/gpt-oss-120b</span>
+            <span class="badge">RAG: BM25/TF-IDF Active</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Satellite Data Providers</h3>
+          <div class="setting-row">
+            <span class="badge">Microsoft Planetary Computer (STAC)</span>
+            <span class="badge">Copernicus Sentinel-2 & Sentinel-1</span>
+            <span class="badge">USGS Landsat 8/9</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>In-App & Browser Notifications</h3>
+          <p class="hint">Real-time alert delivery channel for automated monitoring and satellite risk events.</p>
+          <div class="setting-row">
+            <span class="badge" style="background:rgba(34,197,94,0.15);color:#22c55e;border:1px solid rgba(34,197,94,0.35);">✓ In-App Real-Time Alerts (Active)</span>
+            <button id="btn-request-browser-notif" class="btn" style="font-size:0.82rem;">Enable Browser Notifications</button>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Floating Chatbot Widget (Bottom-Right) — Present on every page -->
+  <div id="floating-chatbot-container" class="floating-chatbot-container">
+    <!-- Floating Action Button (FAB) -->
+    <button id="floating-chat-toggle" class="floating-chat-fab" aria-label="Open AI Assistant" title="Chat with SatQuery AI">
+      <span class="fab-icon-open">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          <path d="M12 7v2" stroke="currentColor" stroke-width="2"></path>
+          <path d="M9 11h6" stroke="currentColor" stroke-width="2"></path>
+        </svg>
+      </span>
+      <span class="fab-icon-close" style="display:none">✕</span>
+      <span class="fab-pulse-ring"></span>
+      <span class="fab-badge">AI</span>
+    </button>
+
+    <!-- Floating Chat Window -->
+    <div id="floating-chat-window" class="floating-chat-window hidden-chat">
+      <!-- Header -->
+      <div class="fc-header">
+        <div class="fc-header-info">
+          <div class="fc-avatar">
+            <span class="fc-sparkle">✨</span>
+            <span class="fc-status-dot"></span>
+          </div>
+          <div>
+            <div class="fc-title">SatQuery AI Assistant</div>
+            <div class="fc-subtitle" id="fc-loc-indicator">📍 Global STAC & Spectral AI</div>
+          </div>
+        </div>
+        <div class="fc-header-actions">
+          <button id="fc-btn-clear" class="fc-icon-btn" title="Clear Chat">🧹</button>
+          <button id="fc-btn-close" class="fc-icon-btn" title="Close">✕</button>
+        </div>
+      </div>
+
+      <!-- Suggestion Chips -->
+      <div class="fc-chips-bar" id="fc-chips-bar">
+        <button class="fc-chip" data-query="Find Namakkal District">📍 Find Namakkal</button>
+        <button class="fc-chip" data-query="Find 11.2189, 78.1674">🌐 Locate 11.2189, 78.1674</button>
+        <button class="fc-chip" data-query="Select Namakkal District boundary">🗺️ Select Real Boundary</button>
+        <button class="fc-chip" data-query="Calculate NDVI">🌱 Calculate NDVI</button>
+        <button class="fc-chip" data-query="Calculate NDWI">💧 Calculate NDWI</button>
+        <button class="fc-chip" data-query="Calculate NDBI">🏙️ Calculate NDBI</button>
+        <button class="fc-chip" data-query="Switch to satellite view">🛰️ Satellite View</button>
+        <button class="fc-chip" data-query="What is remote sensing?">🛰️ Remote sensing</button>
+        <button class="fc-chip" data-query="What is NDVI?">🌱 What is NDVI?</button>
+        <button class="fc-chip" data-query="What is GIS?">🗺️ What is GIS?</button>
+        <button class="fc-chip" data-query="How can satellites monitor crops?">🌾 Monitor crops</button>
+        <button class="fc-chip" data-query="How can satellite imagery detect floods?">🌊 Flood detection</button>
+      </div>
+
+      <!-- Messages stream -->
+      <div class="fc-messages" id="fc-messages">
+        <div class="fc-msg fc-msg-assistant">
+          <div class="fc-msg-avatar">🛰️</div>
+          <div class="fc-msg-content">
+            <div class="fc-msg-body">
+              <p><strong>Hello! I'm your SatQuery AI Assistant.</strong></p>
+              <p>Powered by Groq AI, real OpenStreetMap administrative boundaries, and Microsoft Planetary Computer satellite data.</p>
+              <p>You can ask questions or give commands like <em>"Find Namakkal District"</em>, <em>"Go to 11.2189, 78.1674"</em>, <em>"Calculate NDVI"</em>, or <em>"Switch to satellite view"</em>.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Box -->
+      <div class="fc-input-area">
+        <textarea id="fc-input" rows="1" placeholder="Ask questions or type commands (e.g. Find Namakkal, Calculate NDVI)..."></textarea>
+        <button id="fc-btn-send" class="fc-btn-send" aria-label="Send message">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-App Notification Overlay Container -->
+  <div id="satquery-toast-container" class="satquery-toast-container" aria-live="polite"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/state.js"></script>
+  <script src="/js/map.js"></script>
+  <script src="/js/ui.js"></script>
+  <script src="/js/query.js"></script>
+  <script src="/js/app-main.js"></script>
+  <script src="/js/chatbot.js"></script>
+</body>
+</html>

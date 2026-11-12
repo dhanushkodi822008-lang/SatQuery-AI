@@ -10,6 +10,7 @@
   let chatSessionId = null;
   let currentCompareType = 'date';
   let uploadedImageId = null;
+  let uploadedImageMetadata = null;
   let lastCompareResult = null;
   let lastLandcover = null;
   let landcoverResults = {};
@@ -17,6 +18,9 @@
   let activeLandcoverCategory = 'overall';
   let lastLocationKey = '';
   let reportHistory = [];
+  let areaOverviewRequestId = 0;
+  let areaOverviewRequestKey = null;
+  let areaOverviewRequestPromise = null;
 
   // Manual AOI drawing state
   let activeDrawingMode = null; // 'polygon' | 'rectangle' | 'circle' | null
@@ -663,6 +667,7 @@
       if (!res || res.error) throw new Error(res?.error || 'Upload failed');
       const id = res.image_id || res.id;
       uploadedImageId = id;
+      uploadedImageMetadata = res;
       window.SharedState.setImageId(id);
 
       const preview = $('sat-image-preview');
@@ -672,7 +677,8 @@
       }
 
       const modeText = res.analysis_mode ? ` · Mode: ${res.analysis_mode}` : '';
-      showStatus(statusId, `Uploaded successfully (${res.format || 'Image'}) ${modeText}`, 'success');
+      const noticeText = res.notice ? ` · ${res.notice}` : '';
+      showStatus(statusId, `Uploaded successfully (${res.format || 'Image'}) ${modeText}${noticeText}`, 'success');
       if ($('sat-btn-analyze')) $('sat-btn-analyze').disabled = false;
       return id;
     } catch (e) {
@@ -847,16 +853,6 @@ ${res.limitations || 'Multispectral indices require near-infrared bands in GeoTI
       }
     }
 
-    // Update Status line
-    if (cat === 'overall') {
-      setText('ao-status', `Calculated 4 Earth observation land categories for ${locName}.`);
-    } else {
-      const cfg = CATEGORY_COLORS[cat];
-      if (cfg) {
-        setText('ao-status', `Showing ${cfg.name} analysis result for ${locName}.`);
-      }
-    }
-
     // Update Answer/Statistics Detail Box (#ao-individual-result)
     const singleRes = $('ao-individual-result');
     if (!singleRes) return;
@@ -867,15 +863,18 @@ ${res.limitations || 'Multispectral indices require near-infrared bands in GeoTI
       const builtRes = landcoverResults['Built-up'] || landcoverResults['builtup'];
       const forestRes = landcoverResults['Forest / Vegetation'] || landcoverResults['forest'];
 
-      const wKm2 = waterRes?.area_km2 != null ? Number(waterRes.area_km2) : null;
-      const aKm2 = agriRes?.area_km2 != null ? Number(agriRes.area_km2) : null;
-      const bKm2 = builtRes?.area_km2 != null ? Number(builtRes.area_km2) : null;
-      const fKm2 = forestRes?.area_km2 != null ? Number(forestRes.area_km2) : null;
-
-      const wPct = waterRes?.percentage != null ? Number(waterRes.percentage).toFixed(2) : '0.00';
-      const aPct = agriRes?.percentage != null ? Number(agriRes.percentage).toFixed(2) : '0.00';
-      const bPct = builtRes?.percentage != null ? Number(builtRes.percentage).toFixed(2) : '0.00';
-      const fPct = forestRes?.percentage != null ? Number(forestRes.percentage).toFixed(2) : '0.00';
+      const areaLabel = (result) => result?.success && Number.isFinite(Number(result.area_km2))
+        ? `${Number(result.area_km2).toFixed(3)} km²`
+        : (result?.loading ? 'Calculating…' : 'Unavailable');
+      const coverageLabel = (result) => {
+        if (!result?.success) return escapeHtml(result?.message || 'No measurement available for this category.');
+        const ha = Number(result.area_ha ?? Number(result.area_km2) * 100);
+        const percentage = Number(result.percentage);
+        return `${Number(result.area_km2).toFixed(3)} km² • ${ha.toFixed(2)} ha${Number.isFinite(percentage) ? ` • ${percentage.toFixed(2)}% of AOI` : ''}`;
+      };
+      const source = waterRes?.source || agriRes?.source || builtRes?.source || forestRes?.source;
+      const acquisitionDate = waterRes?.acquisition_date || agriRes?.acquisition_date
+        || builtRes?.acquisition_date || forestRes?.acquisition_date;
 
       singleRes.innerHTML = `
         <div class="category-analysis-detail overall-detail" style="font-size:0.9rem;padding:0.85rem 1rem;background:var(--panel);border:1px solid var(--border);border-radius:8px;border-left:4px solid var(--accent, #3b82f6);margin-top:0.75rem;">
@@ -889,37 +888,37 @@ ${res.limitations || 'Multispectral indices require near-infrared bands in GeoTI
                 <span>💧 Water Bodies</span>
                 <span style="font-size:0.75rem;opacity:0.85;">NDWI</span>
               </div>
-              <div style="font-size:1rem;font-weight:700;margin-top:4px;color:var(--text);">${fmtSqFt(wKm2)}</div>
-              <div style="font-size:0.78rem;color:var(--muted);">${wKm2 != null ? (wKm2.toFixed(3) + ' km² • ' + wPct + '% of AOI') : '—'}</div>
+              <div style="font-size:1rem;font-weight:700;margin-top:4px;color:var(--text);">${areaLabel(waterRes)}</div>
+              <div style="font-size:0.78rem;color:var(--muted);">${coverageLabel(waterRes)}</div>
             </div>
             <div style="padding:0.6rem 0.75rem;background:rgba(132,204,22,0.08);border:1px solid rgba(132,204,22,0.25);border-radius:6px;">
               <div style="color:#84cc16;font-weight:700;font-size:0.88rem;display:flex;align-items:center;justify-content:space-between;">
                 <span>🌾 Agricultural Land</span>
                 <span style="font-size:0.75rem;opacity:0.85;">NDVI</span>
               </div>
-              <div style="font-size:1rem;font-weight:700;margin-top:4px;color:var(--text);">${fmtSqFt(aKm2)}</div>
-              <div style="font-size:0.78rem;color:var(--muted);">${aKm2 != null ? (aKm2.toFixed(3) + ' km² • ' + aPct + '% of AOI') : '—'}</div>
+              <div style="font-size:1rem;font-weight:700;margin-top:4px;color:var(--text);">${areaLabel(agriRes)}</div>
+              <div style="font-size:0.78rem;color:var(--muted);">${coverageLabel(agriRes)}</div>
             </div>
             <div style="padding:0.6rem 0.75rem;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.25);border-radius:6px;">
               <div style="color:#f97316;font-weight:700;font-size:0.88rem;display:flex;align-items:center;justify-content:space-between;">
                 <span>🏙️ Built-up Area</span>
                 <span style="font-size:0.75rem;opacity:0.85;">NDBI</span>
               </div>
-              <div style="font-size:1rem;font-weight:700;margin-top:4px;color:var(--text);">${fmtSqFt(bKm2)}</div>
-              <div style="font-size:0.78rem;color:var(--muted);">${bKm2 != null ? (bKm2.toFixed(3) + ' km² • ' + bPct + '% of AOI') : '—'}</div>
+              <div style="font-size:1rem;font-weight:700;margin-top:4px;color:var(--text);">${areaLabel(builtRes)}</div>
+              <div style="font-size:0.78rem;color:var(--muted);">${coverageLabel(builtRes)}</div>
             </div>
             <div style="padding:0.6rem 0.75rem;background:rgba(21,128,61,0.08);border:1px solid rgba(21,128,61,0.25);border-radius:6px;">
               <div style="color:#22c55e;font-weight:700;font-size:0.88rem;display:flex;align-items:center;justify-content:space-between;">
                 <span>🌲 Forest & Canopy</span>
                 <span style="font-size:0.75rem;opacity:0.85;">High NDVI</span>
               </div>
-              <div style="font-size:1rem;font-weight:700;margin-top:4px;color:var(--text);">${fmtSqFt(fKm2)}</div>
-              <div style="font-size:0.78rem;color:var(--muted);">${fKm2 != null ? (fKm2.toFixed(3) + ' km² • ' + fPct + '% of AOI') : '—'}</div>
+              <div style="font-size:1rem;font-weight:700;margin-top:4px;color:var(--text);">${areaLabel(forestRes)}</div>
+              <div style="font-size:0.78rem;color:var(--muted);">${coverageLabel(forestRes)}</div>
             </div>
           </div>
           <div style="font-size:0.8rem;color:var(--muted);display:flex;flex-direction:column;gap:3px;border-top:1px solid var(--border);padding-top:0.5rem;">
-            <span>• <strong>Data Source:</strong> Microsoft Planetary Computer Sentinel-2 Level-2A (10m/20m COG multispectral surface reflectance)</span>
-            <span>• <strong>Classification:</strong> Simultaneous 4-category Earth observation spectral classification across active study boundary.</span>
+            <span>• <strong>Data Source:</strong> ${escapeHtml(source || 'No satellite data available')}${acquisitionDate ? ` • Acquisition: ${escapeHtml(acquisitionDate)}` : ''}</span>
+            <span>• <strong>Classification:</strong> NDWI water, NDVI vegetation/canopy estimates, and NDBI built-up indication; these are spectral estimates, not trained parcel classifiers.</span>
           </div>
         </div>
       `;
@@ -929,7 +928,7 @@ ${res.limitations || 'Multispectral indices require near-infrared bands in GeoTI
       if (res && res.success && res.area_km2 != null) {
         const areaKm2 = Number(res.area_km2);
         const pct = res.percentage != null ? Number(res.percentage).toFixed(2) : '0.00';
-        const pixelCount = res.pixel_count || res.detected_pixel_count || Math.round((areaKm2 * 1000000) / 100);
+        const pixelCount = Number(res.pixel_count ?? res.detected_pixel_count ?? 0);
         const haTxt = areaKm2 ? ` (${(areaKm2 * 100).toFixed(2)} ha)` : '';
         singleRes.innerHTML = `
           <div class="category-analysis-detail" style="font-size:0.9rem;padding:0.85rem 1rem;background:var(--panel);border:1px solid var(--border);border-radius:8px;border-left:4px solid ${cfg.fill};margin-top:0.75rem;">
@@ -938,17 +937,19 @@ ${res.limitations || 'Multispectral indices require near-infrared bands in GeoTI
               <span style="font-size:0.78rem;background:rgba(255,255,255,0.08);color:${cfg.fill};padding:2px 8px;border-radius:4px;border:1px solid ${cfg.fill}40;font-weight:600;">${cfg.shortMethod || cfg.method}</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:0.45rem;font-size:0.86rem;line-height:1.45;">
-              <div>• <strong>Detected Area:</strong> <span style="font-size:0.95rem;font-weight:700;color:var(--text);">${fmtSqFt(areaKm2)}</span> <span style="color:var(--muted);">${fmtKm2(areaKm2)}${haTxt}</span></div>
+              <div>• <strong>Estimated Area:</strong> <span style="font-size:0.95rem;font-weight:700;color:var(--text);">${areaKm2.toFixed(3)} km²</span> <span style="color:var(--muted);">${haTxt}</span></div>
               <div>• <strong>Coverage:</strong> <strong>${pct}%</strong> of active study area</div>
               <div>• <strong>${cfg.shortMethod || cfg.method} Statistics:</strong> <code>${cfg.formula}</code> &bull; Detected Pixels: <strong>${pixelCount.toLocaleString()}</strong></div>
               <div>• <strong>Interpretation:</strong> ${cfg.interpretation}</div>
-              <div>• <strong>Evidence/data source:</strong> ${cfg.evidence}</div>
+              <div>• <strong>Evidence/data source:</strong> ${escapeHtml(res.source || cfg.evidence)}${res.acquisition_date ? ` • Acquired ${escapeHtml(res.acquisition_date)}` : ''}</div>
               <div style="border-top:1px solid var(--border);padding-top:0.45rem;margin-top:0.25rem;color:var(--muted);font-size:0.8rem;">
                 • <strong>Confidence/limitations:</strong> ${res.quality?.confidence || 'Satellite spectral calculation complete'}. ${cfg.limitations}
               </div>
             </div>
           </div>
         `;
+      } else if (res?.loading) {
+        singleRes.innerHTML = `<div class="info-msg">Calculating multispectral ${cfg.name} estimate…</div>`;
       } else if (res && res.mode === 'METADATA_ONLY') {
         singleRes.innerHTML = `
           <div class="info-msg" style="border-left:4px solid var(--warn);">
@@ -956,13 +957,43 @@ ${res.limitations || 'Multispectral indices require near-infrared bands in GeoTI
           </div>
         `;
       } else {
-        singleRes.innerHTML = `
-          <div class="info-msg">Calculating multispectral ${cfg.name} detection for active AOI...</div>
-        `;
+        singleRes.innerHTML = `<div class="info-msg">${escapeHtml(res?.message || `No valid ${cfg.name} measurement is available for this AOI.`)}</div>`;
       }
     } else {
       singleRes.innerHTML = '';
     }
+  }
+
+  function updateAreaOverviewCards() {
+    const cardMap = [
+      ['Water', 'cat-water'],
+      ['Built-up', 'cat-builtup'],
+      ['Forest / Vegetation', 'cat-forest'],
+      ['Agriculture', 'cat-agri'],
+    ];
+    cardMap.forEach(([name, id]) => {
+      const result = landcoverResults[name];
+      const value = $(id);
+      const sub = value?.parentElement?.querySelector('.cat-sub');
+      if (!result) {
+        setText(id, '—');
+        if (sub) sub.textContent = 'sq ft';
+      } else if (result.loading) {
+        setText(id, 'Calculating…');
+        if (sub) sub.textContent = 'Retrieving multispectral data';
+      } else if (result.success) {
+        const area = Number(result.area_km2);
+        setText(id, Number.isFinite(area) ? `${area.toFixed(3)} km²` : 'Unavailable');
+        if (sub) {
+          const hectares = Number(result.area_ha ?? area * 100);
+          const percentage = Number(result.percentage);
+          sub.textContent = `${hectares.toFixed(2)} ha${Number.isFinite(percentage) ? ` • ${percentage.toFixed(2)}% AOI` : ''}`;
+        }
+      } else {
+        setText(id, 'Unavailable');
+        if (sub) sub.textContent = result.message || 'No valid satellite measurement';
+      }
+    });
   }
 
   function selectLandcoverCategory(cat) {
@@ -1013,49 +1044,112 @@ ${res.limitations || 'Multispectral indices require near-infrared bands in GeoTI
 
   async function refreshAreaOverview() {
     const st = window.SharedState.get();
-    if (!st.location && !st.aoi) {
+    const requestKey = JSON.stringify([
+      st.aoi || null,
+      st.location?.bbox || st.location?.lat || st.location?.lon || null,
+      st.imageId || uploadedImageId || null,
+    ]);
+    if (areaOverviewRequestPromise && areaOverviewRequestKey === requestKey) {
+      return areaOverviewRequestPromise;
+    }
+    const requestId = ++areaOverviewRequestId;
+    areaOverviewRequestKey = requestKey;
+    if (!st.location && !st.aoi && !st.imageId && !uploadedImageId) {
+      areaOverviewRequestKey = null;
+      areaOverviewRequestPromise = null;
       setText('ao-status', 'Search for a location or use Draw AOI to calculate land categories.');
+      updateAreaOverviewCards();
       return;
     }
-    setText('ao-status', 'Calculating multispectral land categories from Sentinel-2 COG reflectance for active AOI…');
-    const categories = [
-      ['Water', 'cat-water', 'water'],
-      ['Agriculture', 'cat-agri', 'agri'],
-      ['Built-up', 'cat-builtup', 'builtup'],
-      ['Forest / Vegetation', 'cat-forest', 'forest'],
-    ];
-    try {
-      const combined = {};
-      for (const [category, id, key] of categories) {
-        let res = landcoverResults[category];
-        if (!res) {
-          try {
-            res = await API.analyzeLandcover(st.imageId, category, st.aoi, st.location);
-            if (res && res.success) {
-              landcoverResults[category] = res;
-              landcoverResults[key] = res;
-            }
-          } catch (err) {
-            console.warn(`Category ${category} fetch failed:`, err);
-            res = null;
-          }
+    landcoverResults = {};
+    ['Water', 'Agriculture', 'Built-up', 'Forest / Vegetation'].forEach((name) => {
+      landcoverResults[name] = { loading: true, success: false, category: name };
+    });
+    updateAreaOverviewCards();
+    setText('ao-status', 'Searching real multispectral satellite data for this AOI…');
+    updateAreaOverviewResultDisplay(activeLandcoverCategory);
+
+    const request = (async () => {
+      try {
+        const selectedImageId = st.imageId || uploadedImageId;
+        const useUploadedGeoTiff = uploadedImageMetadata?.image_id === selectedImageId
+          && uploadedImageMetadata.has_geospatial === true
+          && ['.tif', '.tiff'].includes(
+            String(uploadedImageMetadata.filename || '').slice(String(uploadedImageMetadata.filename || '').lastIndexOf('.')).toLowerCase()
+          );
+        const result = await API.analyzeLandcover(
+          useUploadedGeoTiff ? selectedImageId : null,
+          'Overall Measurement',
+          st.aoi,
+          st.location
+        );
+        if (requestId !== areaOverviewRequestId) return;
+        if (!result || result.success !== true || !result.categories) {
+          throw new Error(result?.message || 'The satellite service returned no land-cover measurements.');
         }
-        if (res && res.success && res.area_km2 != null) {
-          const areaKm2 = Number(res.area_km2);
-          setText(id, fmtSqFtNumber(areaKm2));
-          const sub = $(id)?.parentElement?.querySelector('.cat-sub');
-          if (sub) sub.textContent = `sq ft${fmtKm2(areaKm2)}`;
-          combined[category] = { area_km2: areaKm2, percentage: res.percentage || 0 };
+
+        const aliases = {
+          Water: 'water',
+          Agriculture: 'agri',
+          'Built-up': 'builtup',
+          'Forest / Vegetation': 'forest',
+        };
+        Object.entries(aliases).forEach(([name, alias]) => {
+          const category = result.categories[name];
+          landcoverResults[name] = category
+            ? {
+                ...category,
+                success: category.available === true,
+                source: result.source,
+                satellite: result.satellite,
+                acquisition_date: result.acquisition_date,
+                mode: result.mode,
+                message: category.message,
+              }
+            : {
+                category: name,
+                success: false,
+                message: 'The satellite service did not return this category.',
+              };
+          landcoverResults[alias] = landcoverResults[name];
+        });
+        lastLandcover = result;
+        updateAreaOverviewCards();
+        updateAreaOverviewResultDisplay(activeLandcoverCategory);
+        renderAreaOverviewLayers(activeLandcoverCategory);
+        const availableCount = Object.values(aliases)
+          .filter((alias) => landcoverResults[alias]?.success).length;
+        if (availableCount) {
+          const date = result.acquisition_date ? ` Acquisition: ${result.acquisition_date}.` : '';
+          setText('ao-status', `${availableCount} land-cover measurement${availableCount === 1 ? '' : 's'} calculated from ${result.source || 'the selected satellite data'}.${date}`);
         } else {
-          setText(id, '—');
+          const reason = Object.values(aliases)
+            .map((alias) => landcoverResults[alias]?.message)
+            .find(Boolean);
+          setText('ao-status', reason || result.message || 'No usable multispectral measurements were available for this AOI.');
+        }
+      } catch (error) {
+        if (requestId !== areaOverviewRequestId) return;
+        console.error('Area Overview land-cover request failed:', error);
+        Object.keys(landcoverResults).forEach((name) => {
+          landcoverResults[name] = {
+            category: name,
+            success: false,
+            message: error.message || 'Land-cover analysis failed.',
+          };
+        });
+        updateAreaOverviewCards();
+        updateAreaOverviewResultDisplay(activeLandcoverCategory);
+        setText('ao-status', error.message || 'Land-cover analysis failed. Check satellite availability and retry.');
+      } finally {
+        if (requestId === areaOverviewRequestId) {
+          areaOverviewRequestPromise = null;
+          areaOverviewRequestKey = null;
         }
       }
-      lastLandcover = { analysis_type: 'four-category land cover', categories: combined };
-      updateAreaOverviewResultDisplay(activeLandcoverCategory);
-      renderAreaOverviewLayers(activeLandcoverCategory);
-    } catch (e) {
-      setText('ao-status', 'Overview calculation: ' + (e.message || e));
-    }
+    })();
+    areaOverviewRequestPromise = request;
+    return request;
   }
 
   // ---------- Change Comparison ----------
@@ -1601,8 +1695,14 @@ ${res.limitations || 'Multispectral indices require near-infrared bands in GeoTI
       if ((change.type === 'location' && change.changed) ||
           (change.type === 'aoi' && change.changed) ||
           nextLocationKey !== lastLocationKey) {
+        areaOverviewRequestId += 1;
+        areaOverviewRequestKey = null;
+        areaOverviewRequestPromise = null;
         clearLocationScopedUi();
         lastLocationKey = nextLocationKey;
+        if ($('page-area-overview')?.classList.contains('active')) {
+          refreshAreaOverview();
+        }
       }
       updateAllLocInfo();
       applyLocationAllMaps();

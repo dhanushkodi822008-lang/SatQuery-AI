@@ -5,6 +5,18 @@ const API_BASE = window.location.origin.includes('5500') || window.location.prot
   ? 'http://127.0.0.1:8000'
   : '';
 
+function apiErrorMessage(status, text) {
+  try {
+    const payload = JSON.parse(text);
+    if (typeof payload.detail === 'string') return `API ${status}: ${payload.detail}`;
+    if (Array.isArray(payload.detail)) {
+      const messages = payload.detail.map((item) => item.msg).filter(Boolean);
+      if (messages.length) return `API ${status}: ${messages.join('; ')}`;
+    }
+  } catch (_) {}
+  return `API ${status}: ${text.slice(0, 200)}`;
+}
+
 async function apiGet(path, params = {}) {
   const url = new URL(API_BASE + path, window.location.origin);
   Object.entries(params).forEach(([k, v]) => {
@@ -13,22 +25,34 @@ async function apiGet(path, params = {}) {
   const res = await fetch(url.toString());
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(apiErrorMessage(res.status, text));
   }
   return res.json();
 }
 
-async function apiPost(path, body) {
-  const res = await fetch(API_BASE + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
+async function apiPost(path, body, { timeoutMs = 30000 } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(API_BASE + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(apiErrorMessage(res.status, text));
+    }
+    return await res.json();
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds. Please try a smaller AOI or try again.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return res.json();
 }
 
 async function apiUploadImage(file) {
@@ -42,12 +66,7 @@ async function apiUploadImage(file) {
 
   if (!res.ok) {
     const text = await res.text();
-    let detail = text;
-    try {
-      const payload = JSON.parse(text);
-      detail = payload.detail || JSON.stringify(payload);
-    } catch (_) {}
-    throw new Error(detail.slice(0, 250));
+    throw new Error(apiErrorMessage(res.status, text));
   }
   return res.json();
 }
@@ -97,7 +116,7 @@ const API = {
     category,
     ...(aoi ? { aoi } : {}),
     ...(location ? { location, bbox: location.bbox || null } : {}),
-  }),
+  }, { timeoutMs: 180000 }),
 
   // Dashboard / risk / export / alerts
   dashboardOverview: (body) => apiPost('/api/dashboard/overview', body),

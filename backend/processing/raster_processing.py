@@ -7,11 +7,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import numpy as np
 
-from backend.utils.logging import logger
 from backend.processing.ndvi import compute_ndvi
 from backend.processing.ndwi import compute_ndwi
 from backend.processing.ndbi import compute_ndbi
-from backend.processing.area_calculation import mask_area_km2, aoi_area_from_bbox
 
 
 def summarize_without_raster(
@@ -72,7 +70,11 @@ def analyze_optical_aoi(
     if "ndbi" in analyses:
         needed.update(["swir16", "nir"])
 
-    fetched = fetch_optical_bands(scene, bbox, needed=list(needed))
+    fetched = fetch_optical_bands(
+        scene,
+        bbox,
+        needed=[band for band in ("green", "red", "nir", "swir16") if band in needed],
+    )
     if not fetched.get("success"):
         meta = summarize_without_raster(scene, aoi_area_km2, ",".join(analyses))
         meta["fetch_error"] = fetched.get("error")
@@ -113,7 +115,38 @@ def analyze_optical_aoi(
             transform=from_bounds(*bbox, results["shape"][1], results["shape"][0]),
             invert=True,
         )
+        aoi_pixel_count = int(np.sum(inside))
         nodata_mask = ~inside
+    else:
+        inside = np.ones(tuple(results["shape"]), dtype=bool)
+        aoi_pixel_count = int(inside.size)
+
+    if aoi_pixel_count == 0:
+        return {
+            "success": False,
+            "error": "The selected AOI does not overlap the satellite raster.",
+            "mode": "NO_AOI_COVERAGE",
+            "scene": _scene_summary(scene),
+        }
+
+    def measurement(mask: np.ndarray, valid: np.ndarray) -> Dict[str, Any]:
+        valid_aoi = valid & inside
+        detected = mask & valid_aoi
+        detected_count = int(np.sum(detected))
+        valid_count = int(np.sum(valid_aoi))
+        percent_of_aoi = detected_count / aoi_pixel_count * 100.0
+        valid_coverage = valid_count / aoi_pixel_count * 100.0
+        area_km2 = aoi_area_km2 * percent_of_aoi / 100.0
+        return {
+            "pixel_count": detected_count,
+            "valid_pixel_count": valid_count,
+            "valid_coverage_pct": round(valid_coverage, 2),
+            "fraction": detected_count / valid_count if valid_count else 0.0,
+            "pct_approx": round(percent_of_aoi, 2),
+            "pct_of_aoi": round(percent_of_aoi, 2),
+            "area_km2": round(area_km2, 4),
+            "area_ha": round(area_km2 * 100.0, 4),
+        }
 
     # NDWI water
     if ("ndwi" in analyses or "water" in analyses) and "green" in bands and "nir" in bands:
@@ -121,15 +154,13 @@ def analyze_optical_aoi(
         water_mask = ndwi.pop("water_mask", None)
         ndwi.pop("array", None)
         if ndwi.get("success") and water_mask is not None:
-            frac = float(ndwi.get("water_pixel_fraction") or 0.0)
-            water_km2 = round(frac * aoi_area_km2, 4) if aoi_area_km2 > 0 else mask_area_km2(water_mask, res_m)
+            valid = np.isfinite(bands["green"]) & np.isfinite(bands["nir"]) & ~nodata_mask
+            measured = measurement(water_mask, valid)
             results["indices"]["ndwi"] = ndwi
             results["quantitative_result"]["water"] = {
-                "area_km2": water_km2,
-                "fraction": frac,
-                "fraction_of_valid_pixels": frac,
-                "pct_approx": round(frac * 100, 2),
-                "pct_of_aoi_approx": round(frac * 100, 2),
+                **measured,
+                "fraction_of_valid_pixels": measured["fraction"],
+                "pct_of_aoi_approx": measured["pct_of_aoi"],
                 "unit": "km²",
                 "method": ndwi.get("method"),
                 "observation_date": scene.get("acquisition_date"),
@@ -148,17 +179,12 @@ def analyze_optical_aoi(
         ndvi.pop("array", None)
         if ndvi.get("success") and veg_array is not None:
             results["indices"]["ndvi"] = ndvi
-            valid_pixels = np.sum(np.isfinite(veg_array))
-            total_valid = max(1, int(valid_pixels))
-
+            valid_mask = np.isfinite(veg_array) & inside
             # Agriculture: Moderate NDVI (0.18 < NDVI <= 0.45)
-            agri_mask = np.isfinite(veg_array) & (veg_array > 0.18) & (veg_array <= 0.45)
-            agri_frac = float(np.sum(agri_mask) / total_valid)
-            agri_km2 = round(agri_frac * aoi_area_km2, 4) if aoi_area_km2 > 0 else mask_area_km2(agri_mask, res_m)
+            agri_mask = valid_mask & (veg_array > 0.18) & (veg_array <= 0.45)
+            agri = measurement(agri_mask, valid_mask)
             results["quantitative_result"]["agriculture"] = {
-                "area_km2": agri_km2,
-                "fraction": agri_frac,
-                "pct_approx": round(agri_frac * 100, 2),
+                **agri,
                 "mean_ndvi": ndvi.get("mean"),
                 "method": "NDVI Agricultural Classification (0.18 < NDVI <= 0.45)",
                 "note": "Agricultural cropland, cultivated fields, pasture, and open vegetative cover.",
@@ -170,13 +196,10 @@ def analyze_optical_aoi(
             results["map_geojson"]["vegetation"] = results["map_geojson"]["agriculture"]
 
             # Forest & Canopy: High NDVI (> 0.45)
-            forest_mask = np.isfinite(veg_array) & (veg_array > 0.45)
-            forest_frac = float(np.sum(forest_mask) / total_valid)
-            forest_km2 = round(forest_frac * aoi_area_km2, 4) if aoi_area_km2 > 0 else mask_area_km2(forest_mask, res_m)
+            forest_mask = valid_mask & (veg_array > 0.45)
+            forest = measurement(forest_mask, valid_mask)
             results["quantitative_result"]["forest"] = {
-                "area_km2": forest_km2,
-                "fraction": forest_frac,
-                "pct_approx": round(forest_frac * 100, 2),
+                **forest,
                 "mean_ndvi": ndvi.get("mean"),
                 "method": "NDVI Dense Canopy Classification (NDVI > 0.45)",
                 "note": "Closed forest canopy, dense woodland, plantations, and thick tree cover.",
@@ -186,12 +209,10 @@ def analyze_optical_aoi(
             results["map_geojson"]["forest"] = mask_to_geojson(forest_mask, bbox)
 
             # Combined vegetation for backwards compatibility
-            veg_mask = np.isfinite(veg_array) & (veg_array > 0.20)
-            veg_frac = float(np.sum(veg_mask) / total_valid)
+            veg_mask = valid_mask & (veg_array > 0.20)
+            veg = measurement(veg_mask, valid_mask)
             results["quantitative_result"]["vegetation_indicated"] = {
-                "area_km2": round(veg_frac * aoi_area_km2, 4) if aoi_area_km2 > 0 else mask_area_km2(veg_mask, res_m),
-                "fraction": veg_frac,
-                "pct_approx": round(veg_frac * 100, 2),
+                **veg,
                 "mean_ndvi": ndvi.get("mean"),
                 "method": ndvi.get("method"),
                 "observation_date": scene.get("acquisition_date"),
@@ -203,24 +224,21 @@ def analyze_optical_aoi(
         ndbi = compute_ndbi(bands["swir16"], bands["nir"], nodata_mask=nodata_mask, builtup_threshold=0.0)
         built_mask = ndbi.pop("builtup_mask", None)
         ndbi.pop("array", None)
-        if ndbi.get("success"):
+        if ndbi.get("success") and built_mask is not None:
             results["indices"]["ndbi"] = ndbi
-            bfrac = float(ndbi.get("builtup_indicated_fraction") or 0.0)
-            built_km2 = round(bfrac * aoi_area_km2, 4) if aoi_area_km2 > 0 else (mask_area_km2(built_mask, res_m) if built_mask is not None else 0.0)
+            valid = np.isfinite(bands["swir16"]) & np.isfinite(bands["nir"]) & ~nodata_mask
+            built = measurement(built_mask, valid)
             results["quantitative_result"]["builtup_indicated"] = {
-                "area_km2": built_km2,
-                "fraction": bfrac,
-                "pct_approx": round(bfrac * 100, 2),
+                **built,
                 "method": ndbi.get("method"),
                 "note": ndbi.get("note"),
                 "observation_date": scene.get("acquisition_date"),
                 "satellite": scene.get("satellite"),
             }
             results["quantitative_result"]["builtup"] = results["quantitative_result"]["builtup_indicated"]
-            if built_mask is not None:
-                results["map_points"]["builtup"] = mask_to_geojson_points(built_mask, bbox)
-                results["map_geojson"] = results.get("map_geojson", {})
-                results["map_geojson"]["builtup"] = mask_to_geojson(built_mask, bbox)
+            results["map_points"]["builtup"] = mask_to_geojson_points(built_mask, bbox)
+            results["map_geojson"] = results.get("map_geojson", {})
+            results["map_geojson"]["builtup"] = mask_to_geojson(built_mask, bbox)
 
     if not results["quantitative_result"]:
         results["message"] = "Bands fetched but index computation produced no quantitative result"

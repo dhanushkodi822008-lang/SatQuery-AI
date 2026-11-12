@@ -1,5 +1,4 @@
 import io
-from pathlib import Path
 
 import numpy as np
 import rasterio
@@ -8,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.config import get_settings
+from backend.routes import landcover_routes
 
 client = TestClient(app)
 settings = get_settings()
@@ -48,6 +48,32 @@ def _create_upload(file_name: str, *, red=None, green=None, nir=None, swir16=Non
     response = client.post(
         "/api/images/upload",
         files={"file": (file_name, data.read(), "image/tiff")},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _create_metadata_incomplete_upload(*, crs="EPSG:4326", transform=None):
+    data = io.BytesIO()
+    profile = {
+        "driver": "GTiff",
+        "width": 10,
+        "height": 10,
+        "count": 4,
+        "dtype": "uint16",
+        "crs": crs,
+    }
+    if transform is not None:
+        profile["transform"] = transform
+    with rasterio.open(data, "w", **profile) as dst:
+        for band in range(1, 5):
+            dst.set_band_description(band, ("blue", "green", "red", "nir")[band - 1])
+            dst.write(np.full((10, 10), band, dtype=np.uint16), band)
+
+    data.seek(0)
+    response = client.post(
+        "/api/images/upload",
+        files={"file": ("metadata_incomplete.tif", data.read(), "image/tiff")},
     )
     assert response.status_code == 200, response.text
     return response.json()
@@ -124,7 +150,8 @@ def test_missing_required_bands():
     )
 
     assert result.status_code == 400
-    assert "requires bands" in result.json()["detail"]
+    assert "requires bands green, nir" in result.json()["detail"]
+    assert "missing green, nir" in result.json()["detail"]
 
 
 def test_raster_processing_error():
@@ -135,6 +162,103 @@ def test_raster_processing_error():
     )
     assert response.status_code == 400
     assert "Invalid raster or corrupted TIFF file" in response.json()["detail"]
+    assert "uploads" not in response.json()["detail"]
+
+
+def test_missing_crs_is_rejected_with_clear_message():
+    uploaded = _create_metadata_incomplete_upload(crs=None, transform=from_origin(78, 11, 0.1, 0.1))
+    result = client.post(
+        "/api/landcover/analyze",
+        json={"image_id": uploaded["image_id"], "category": "Water"},
+    )
+
+    assert result.status_code == 400
+    assert "valid CRS is missing" in result.json()["detail"]
+
+
+def test_missing_geotransform_is_rejected_with_clear_message():
+    uploaded = _create_metadata_incomplete_upload()
+    assert uploaded["has_geospatial"] is False
+    result = client.post(
+        "/api/landcover/analyze",
+        json={"image_id": uploaded["image_id"], "category": "Water"},
+    )
+
+    assert result.status_code == 400
+    assert "affine geotransform is missing or invalid" in result.json()["detail"]
+
+
+def test_rgb_image_is_not_accepted_for_geospatial_index_analysis():
+    image = io.BytesIO()
+    from PIL import Image
+
+    Image.new("RGB", (10, 10), color=(20, 50, 80)).save(image, format="PNG")
+    upload = client.post(
+        "/api/images/upload",
+        files={"file": ("rgb.png", image.getvalue(), "image/png")},
+    )
+    assert upload.status_code == 200
+    result = client.post(
+        "/api/landcover/analyze",
+        json={"image_id": upload.json()["image_id"], "category": "Water"},
+    )
+
+    assert result.status_code == 400
+    assert "requires a GeoTIFF" in result.json()["detail"]
+    assert "do not contain" in result.json()["detail"]
+
+
+def test_invalid_analysis_request_is_rejected():
+    result = client.post("/api/landcover/analyze", json={})
+    assert result.status_code == 422
+    assert "category" in result.text
+
+
+def test_overall_measurement_returns_category_metrics_and_acquisition(monkeypatch):
+    scene = {
+        "id": "test-scene",
+        "satellite": "Sentinel-2",
+        "sensor": "MSI",
+        "acquisition_date": "2026-09-01",
+        "cloud_cover_pct": 5.0,
+    }
+    async def fake_get_best_scene(_bbox):
+        return {"success": True, "scene": scene, "candidates": [scene]}
+
+    monkeypatch.setattr(landcover_routes, "get_best_optical_scene", fake_get_best_scene)
+
+    def fake_analysis(*args, **kwargs):
+        return {
+            "success": True,
+            "mode": "RASTER",
+            "scene": scene,
+            "source": "Microsoft Planetary Computer (signed COG windowed read)",
+            "quantitative_result": {
+                "water": {"area_km2": 1.2, "area_ha": 120, "pct_of_aoi": 12, "pixel_count": 12, "valid_coverage_pct": 98},
+                "agriculture": {"area_km2": 2.3, "area_ha": 230, "pct_of_aoi": 23, "pixel_count": 23},
+                "builtup": {"area_km2": 0.4, "area_ha": 40, "pct_of_aoi": 4, "pixel_count": 4},
+                "forest": {"area_km2": 1.1, "area_ha": 110, "pct_of_aoi": 11, "pixel_count": 11},
+            },
+        }
+
+    monkeypatch.setattr(landcover_routes, "analyze_optical_aoi", fake_analysis)
+    aoi = {
+        "type": "Polygon",
+        "coordinates": [[[78.0, 10.0], [78.2, 10.0], [78.2, 10.2], [78.0, 10.2], [78.0, 10.0]]],
+    }
+    result = client.post(
+        "/api/landcover/analyze",
+        json={"category": "Overall Measurement", "aoi": aoi},
+    )
+
+    assert result.status_code == 200, result.text
+    payload = result.json()
+    assert payload["source"].startswith("Microsoft Planetary Computer")
+    assert payload["acquisition_date"] == "2026-09-01"
+    assert payload["categories"]["Water"]["area_km2"] == 1.2
+    assert payload["categories"]["Water"]["area_ha"] == 120
+    assert payload["categories"]["Water"]["percentage"] == 12
+    assert payload["categories"]["Built-up"]["index"] == "NDBI"
 
 
 def test_correct_spatial_bounds_in_response():

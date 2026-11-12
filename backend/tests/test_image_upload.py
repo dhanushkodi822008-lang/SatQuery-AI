@@ -53,3 +53,14 @@ def test_upload_rejects_unsupported_extension():
     assert response.status_code == 400
     payload = response.json()
     assert "Unsupported image type" in payload["detail"]
+
+
+def test_upload_rejects_corrupted_tiff_without_exposing_server_path():
+    response = client.post(
+        "/api/images/upload",
+        files={"file": ("corrupted.tif", b"not a raster", "image/tiff")},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid raster or corrupted TIFF file" in response.json()["detail"]
+    assert "uploads" not in response.json()["detail"]

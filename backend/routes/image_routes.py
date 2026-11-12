@@ -1,5 +1,6 @@
 import re
 import uuid
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -9,11 +10,15 @@ import rasterio
 from PIL import Image
 
 from backend.config import get_settings
-from backend.services.landcover_service import analyze_visual_satellite_image, analyze_uploaded_landcover
+from backend.services.landcover_service import (
+    analyze_visual_satellite_image,
+    geospatial_metadata_error,
+)
 
 router = APIRouter(prefix="/api/images", tags=["images"])
 settings = get_settings()
 ALLOWED_EXTENSIONS = {".tif", ".tiff", ".jpg", ".jpeg", ".png", ".webp"}
+logger = logging.getLogger(__name__)
 
 
 def sanitize_filename(filename: str) -> str:
@@ -72,17 +77,19 @@ async def upload_image(file: UploadFile = File(...)):
     try:
         destination.write_bytes(contents)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {exc}") from exc
+        logger.exception("Failed to persist uploaded image")
+        raise HTTPException(status_code=500, detail="Image upload failed because of an internal error.") from exc
 
     try:
         if extension in {".tif", ".tiff"}:
             try:
                 with rasterio.open(destination) as src:
-                    if src.width is None or src.height is None:
+                    if src.width <= 0 or src.height <= 0:
                         raise ValueError("Invalid raster dimensions.")
 
-                    has_crs = src.crs is not None
-                    crs_value = str(src.crs) if has_crs else "MISSING CRS"
+                    geospatial_error = geospatial_metadata_error(src)
+                    has_geospatial = geospatial_error is None
+                    crs_value = str(src.crs) if src.crs is not None else "MISSING CRS"
                     bounds = src.bounds
                     resolution_x, resolution_y = src.res
                     response = {
@@ -90,33 +97,31 @@ async def upload_image(file: UploadFile = File(...)):
                         "filename": sanitize_filename(file.filename),
                         "image_id": image_id,
                         "stored_filename": destination.name,
-                        "format": "GeoTIFF" if has_crs else "TIFF (No CRS)",
+                        "format": "GeoTIFF" if has_geospatial else "TIFF (Missing geospatial metadata)",
                         "image_type": "Satellite / Aerial Imagery",
-                        "analysis_mode": "Advanced Geospatial Analysis" if has_crs else "Visual Satellite Image Analysis",
+                        "analysis_mode": "Advanced Geospatial Analysis" if has_geospatial else "Visual Satellite Image Analysis",
                         "width": int(src.width),
                         "height": int(src.height),
                         "bands": int(src.count),
+                        "band_descriptions": [description or "" for description in (src.descriptions or ())],
                         "crs": crs_value,
                         "bounds": {
                             "left": float(bounds.left),
                             "bottom": float(bounds.bottom),
                             "right": float(bounds.right),
                             "top": float(bounds.top),
-                        } if has_crs else None,
+                        } if has_geospatial else None,
                         "resolution": {
                             "x": float(abs(resolution_x)),
                             "y": float(abs(resolution_y)),
-                        } if has_crs else None,
+                        } if has_geospatial else None,
                         "dtype": str(src.dtypes[0]) if src.dtypes else "UNKNOWN",
                         "file_size_bytes": int(destination.stat().st_size),
-                        "has_geospatial": has_crs,
+                        "has_geospatial": has_geospatial,
                     }
 
-                    if not has_crs:
-                        response["notice"] = (
-                            "This image appears to be a GeoTIFF, but it does not contain geographic reference information (CRS). "
-                            "We can analyze its visible satellite content, but map-based spatial calculations require geographic reference information."
-                        )
+                    if geospatial_error:
+                        response["notice"] = geospatial_error
 
                     return response
             except (RasterioIOError, ValueError):
@@ -174,13 +179,15 @@ async def upload_image(file: UploadFile = File(...)):
 
     except (RasterioIOError, ValueError, OSError) as exc:
         destination.unlink(missing_ok=True)
+        logger.exception("Rejected invalid or unreadable uploaded image")
         raise HTTPException(
             status_code=400,
-            detail=f"Could not process image file: {exc}",
+            detail="Invalid raster or corrupted TIFF file. Upload a readable GeoTIFF or supported image.",
         ) from exc
     except Exception as exc:
         destination.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=f"Upload failed: {exc}") from exc
+        logger.exception("Unexpected uploaded image processing failure")
+        raise HTTPException(status_code=500, detail="Image processing failed because of an internal error.") from exc
 
 
 @router.post("/{image_id}/visual-analysis")

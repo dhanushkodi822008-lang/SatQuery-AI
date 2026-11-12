@@ -39,9 +39,45 @@ CATEGORY_DEFINITIONS = {
 }
 
 
+class LandCoverInputError(ValueError):
+    """An uploaded raster cannot support the requested geospatial analysis."""
+
+
+def geospatial_metadata_error(src: rasterio.io.DatasetReader) -> Optional[str]:
+    if src.width <= 0 or src.height <= 0:
+        return "The raster has invalid dimensions. Upload a non-empty GeoTIFF."
+
+    errors = []
+    if src.crs is None:
+        errors.append("a valid CRS is missing")
+
+    transform = src.transform
+    coefficients = (transform.a, transform.b, transform.c, transform.d, transform.e, transform.f)
+    if (
+        not all(math.isfinite(value) for value in coefficients)
+        or transform == Affine.identity()
+        or abs(transform.a * transform.e - transform.b * transform.d) == 0
+    ):
+        errors.append("a usable affine geotransform is missing or invalid")
+
+    bounds = src.bounds
+    if (
+        not all(math.isfinite(value) for value in bounds)
+        or bounds.right <= bounds.left
+        or bounds.top <= bounds.bottom
+    ):
+        errors.append("the spatial bounds are invalid")
+    if errors:
+        return (
+            "Geospatial analysis cannot proceed because "
+            f"{' and '.join(errors)}. Geographic coordinates cannot be inferred or assigned."
+        )
+    return None
+
+
 def _normalize_category(category: str) -> str:
     if category is None:
-        raise ValueError("No land-use category provided.")
+        raise LandCoverInputError("No land-use category provided.")
     normalized = category.strip()
     if normalized.lower() == "water":
         return "Water"
@@ -51,7 +87,7 @@ def _normalize_category(category: str) -> str:
         return "Forest / Vegetation"
     if normalized.lower() in {"built-up", "builtup", "urban", "built up"}:
         return "Built-up"
-    raise ValueError(f"Unsupported category '{category}'. Supported categories: Water, Agriculture, Forest / Vegetation, Built-up.")
+    raise LandCoverInputError(f"Unsupported category '{category}'. Supported categories: Water, Agriculture, Forest / Vegetation, Built-up.")
 
 
 def _parsed_band_name(value: Optional[str]) -> Optional[str]:
@@ -265,13 +301,17 @@ def analyze_uploaded_landcover(
     normalized_category = _normalize_category(category)
     config = CATEGORY_DEFINITIONS[normalized_category]
 
+    if Path(image_path).suffix.lower() not in {".tif", ".tiff"}:
+        raise LandCoverInputError(
+            "Land-cover index analysis requires a GeoTIFF. PNG and JPG images do not contain "
+            "the geospatial reference or multispectral bands needed for NDVI, NDWI, or NDBI."
+        )
+
     try:
         with rasterio.open(image_path) as src:
-            if src.crs is None:
-                raise ValueError(
-                    "This image appears to be a GeoTIFF, but it does not contain geographic reference information (CRS). "
-                    "We can analyze its visible satellite content, but map-based spatial calculations require geographic reference information."
-                )
+            metadata_error = geospatial_metadata_error(src)
+            if metadata_error:
+                raise LandCoverInputError(metadata_error)
 
             analysis_transform = src.transform
             analysis_width = src.width
@@ -284,12 +324,12 @@ def analyze_uploaded_landcover(
                     try:
                         selected_aoi = selected_aoi.buffer(0)
                     except Exception:
-                        raise ValueError("The selected AOI is not valid. Please redraw it.")
+                        raise LandCoverInputError("The selected AOI is not valid. Please redraw it.")
                 if src.crs != rasterio.crs.CRS.from_epsg(4326):
                     from rasterio.warp import transform_geom
                     selected_aoi = shape(transform_geom("EPSG:4326", src.crs, aoi_geojson))
                 if selected_aoi.is_empty:
-                    raise ValueError("Selected AOI does not overlap the uploaded raster.")
+                    raise LandCoverInputError("Selected AOI does not overlap the uploaded raster.")
                 aoi_mask = features.geometry_mask(
                     [selected_aoi.__geo_interface__],
                     out_shape=(src.height, src.width),
@@ -297,23 +337,24 @@ def analyze_uploaded_landcover(
                     invert=True,
                 )
                 if not np.any(aoi_mask):
-                    raise ValueError("Selected AOI does not overlap the uploaded raster.")
+                    raise LandCoverInputError("Selected AOI does not overlap the uploaded raster.")
 
             band_map = _build_band_map(src)
             required = config["required_bands"]
             missing = [band for band in required if not any(name == band for name in band_map.values())]
             if missing:
-                raise ValueError(
-                    f"NDVI/NDWI/NDBI cannot be calculated from this image because the required multispectral bands ({', '.join(missing)}) are not available. "
-                    f"The selected index '{normalized_category}' requires {required} bands. "
-                    f"Standard RGB imagery contains only Red, Green, and Blue bands."
+                raise LandCoverInputError(
+                    f"The selected category '{normalized_category}' requires bands {', '.join(required)}; "
+                    f"this raster is missing {', '.join(missing)}. Add band descriptions such as "
+                    "'red', 'green', 'nir' (B08), or 'swir16' (B11), or provide the supported "
+                    "four-band Blue/Green/Red/NIR stack. Standard RGB imagery does not include NIR or SWIR."
                 )
 
             band_arrays: Dict[str, np.ndarray] = {}
             for band_name in required:
                 band_index = next((idx for idx, name in band_map.items() if name == band_name), None)
                 if band_index is None:
-                    raise ValueError(f"Required band '{band_name}' is not available in the uploaded raster metadata.")
+                    raise LandCoverInputError(f"Required band '{band_name}' is not available in the uploaded raster metadata.")
                 band_data = src.read(band_index).astype(np.float32)
                 if aoi_geojson is not None and aoi_mask is not None:
                     band_data = np.where(aoi_mask, band_data, np.nan)
@@ -351,7 +392,7 @@ def analyze_uploaded_landcover(
                 threshold = 0.0
                 quality_note = "Baseline NDBI built-up indication; not a building footprint or parcel classifier."
             else:
-                raise ValueError(f"Unsupported category '{normalized_category}'.")
+                raise LandCoverInputError(f"Unsupported category '{normalized_category}'.")
 
             index_values = index[valid_pixels]
             stats = {}
@@ -389,7 +430,7 @@ def analyze_uploaded_landcover(
                 "class": normalized_category,
                 "analysis_method": config["method"],
                 "method": config["method"],
-                "image_id": image_path.split("/")[-1].rsplit(".", 1)[0] if image_path else None,
+                "image_id": Path(image_path).stem if image_path else None,
                 "detected_pixel_count": detected_pixels,
                 "pixel_count": detected_pixels,
                 "detected_area_sq_km": round(float(detected_area_m2 / 1_000_000.0), 6),
@@ -425,5 +466,9 @@ def analyze_uploaded_landcover(
             if normalized_category in {"Agriculture", "Forest / Vegetation"} and not stats:
                 result["warning"] = "No vegetation pixels met the threshold in the uploaded raster."
             return result
-    except (ValueError, rasterio.errors.RasterioIOError, OSError) as exc:
-        raise ValueError(str(exc)) from exc
+    except LandCoverInputError:
+        raise
+    except (rasterio.errors.RasterioIOError, OSError) as exc:
+        raise LandCoverInputError(
+            "The uploaded GeoTIFF is invalid or corrupted. Upload a readable GeoTIFF with geospatial metadata."
+        ) from exc

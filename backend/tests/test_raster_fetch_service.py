@@ -3,6 +3,7 @@ import rasterio
 from rasterio.transform import from_origin
 
 from backend.processing.ndwi import compute_ndwi
+from backend.processing.raster_processing import analyze_optical_aoi
 from backend.services import raster_fetch_service as fetcher
 
 
@@ -131,8 +132,8 @@ def test_synthetic_geotiff_is_read_before_ndwi(tmp_path):
     with rasterio.open(nir_path, "w", **profile) as dst:
         dst.write(np.array([[0.1, 0.3], [0.2, 0.4]], dtype=np.float32), 1)
 
-    green = fetcher._read_band_window(str(green_path), [78.0, 10.0, 78.2, 10.2])[0]
-    nir = fetcher._read_band_window(str(nir_path), [78.0, 10.0, 78.2, 10.2])[0]
+    green = fetcher._read_band_window(str(green_path), [78.0, 10.0, 78.2, 10.2], max_size=2)[0]
+    nir = fetcher._read_band_window(str(nir_path), [78.0, 10.0, 78.2, 10.2], max_size=2)[0]
     result = compute_ndwi(green, nir, water_threshold=0.0)
 
     assert result["success"] is True
@@ -147,3 +148,67 @@ def test_water_mask_geojson_generation():
     assert result["type"] == "FeatureCollection"
     assert len(result["features"]) == 1
     assert result["features"][0]["geometry"]["type"] in {"Polygon", "MultiPolygon"}
+
+
+def test_overall_indices_use_shared_bands_and_report_aoi_area(monkeypatch):
+    bands = {
+        "green": np.array([[0.8, 0.1], [0.7, 0.2]], dtype=np.float32),
+        "red": np.array([[0.2, 0.5], [0.2, 0.5]], dtype=np.float32),
+        "nir": np.array([[0.6, 0.1], [0.5, 0.5]], dtype=np.float32),
+        "swir16": np.array([[0.8, 0.7], [0.2, np.nan]], dtype=np.float32),
+    }
+    requested = {}
+
+    def fake_fetch(scene, bbox, needed):
+        requested["bands"] = needed
+        return {"success": True, "bands": bands, "shape": [2, 2], "resolution_m": 10}
+
+    monkeypatch.setattr(fetcher, "fetch_optical_bands", fake_fetch)
+    scene = {
+        "id": "synthetic-sentinel",
+        "collection": "sentinel-2-l2a",
+        "stac_item": {"assets": {}},
+        "satellite": "Sentinel-2",
+        "sensor": "MSI",
+        "acquisition_date": "2026-09-01",
+    }
+
+    result = analyze_optical_aoi(
+        scene,
+        [78.0, 10.0, 78.2, 10.2],
+        4.0,
+        analyses=["ndwi", "ndvi", "ndbi"],
+    )
+
+    assert result["mode"] == "RASTER"
+    assert set(requested["bands"]) == {"green", "red", "nir", "swir16"}
+    assert result["quantitative_result"]["water"]["area_km2"] == 2.0
+    assert result["quantitative_result"]["water"]["pct_of_aoi"] == 50.0
+    assert result["quantitative_result"]["agriculture"]["area_km2"] == 1.0
+    assert result["quantitative_result"]["forest"]["area_km2"] == 1.0
+    assert result["quantitative_result"]["builtup"]["area_km2"] == 2.0
+    assert result["quantitative_result"]["builtup"]["valid_coverage_pct"] == 75.0
+
+
+def test_read_band_window_preserves_nodata_and_geographic_grid(tmp_path):
+    path = tmp_path / "band_nodata.tif"
+    profile = {
+        "driver": "GTiff",
+        "width": 2,
+        "height": 2,
+        "count": 1,
+        "dtype": "float32",
+        "crs": "EPSG:4326",
+        "transform": from_origin(78.0, 10.2, 0.1, 0.1),
+        "nodata": -9999.0,
+    }
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(np.array([[0.2, -9999.0], [0.4, 0.6]], dtype=np.float32), 1)
+
+    result = fetcher._read_band_window(str(path), [78.0, 10.0, 78.2, 10.2], max_size=8)
+
+    assert result is not None
+    values, metadata = result
+    assert values.shape == (8, 8)
+    assert metadata["crs"] == "EPSG:4326"
+    assert np.isnan(values).any()

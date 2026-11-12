@@ -161,35 +161,51 @@ async def search_scenes(
 
 async def get_best_optical_scene(bbox: List[float], lookback_days: int = 90) -> Dict[str, Any]:
     end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    result = await search_scenes(
-        bbox=bbox,
-        start_date=start,
-        end_date=end,
-        collections=["sentinel-2-l2a", "landsat-c2-l2"],
-        max_cloud=35.0,
-        limit=15,
-    )
-    if not result.get("success") or not result.get("scenes"):
+    lookback_windows = list(dict.fromkeys((lookback_days, max(365, lookback_days))))
+    result = None
+    start = end
+    for days in lookback_windows:
+        start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        result = await search_scenes(
+            bbox=bbox,
+            start_date=start,
+            end_date=end,
+            collections=["sentinel-2-l2a", "landsat-c2-l2"],
+            max_cloud=35.0,
+            limit=15,
+        )
+        if result.get("success") and result.get("scenes"):
+            break
+        if result.get("success") is False:
+            break
+    if not result or not result.get("success") or not result.get("scenes"):
         return {
             "success": False,
-            "error": "No suitable optical scenes found in the lookback window",
-            "reason": "No cloud-free or low-cloud optical acquisition available for this AOI in the selected period",
+            "error": (
+                result.get("error") if result and not result.get("success")
+                else "No suitable optical scenes found in the extended lookback window"
+            ),
+            "reason": "No cloud-filtered optical acquisition is available for this AOI in the searched date ranges.",
             "date_range": [start, end],
             "source": result.get("source"),
             "search_result": result,
         }
-    # Prefer Sentinel-2, then lowest cloud
+    # Prefer Sentinel-2, then clearer and newer scenes for safe retrieval fallbacks.
     scenes = result["scenes"]
     s2 = [s for s in scenes if "sentinel-2" in (s.get("collection") or "")]
-    chosen = None
-    if s2:
-        chosen = min(s2, key=lambda s: s.get("cloud_cover_pct") if s.get("cloud_cover_pct") is not None else 999)
-    else:
-        chosen = min(scenes, key=lambda s: s.get("cloud_cover_pct") if s.get("cloud_cover_pct") is not None else 999)
+    candidates = s2 or scenes
+    candidates = sorted(
+        candidates,
+        key=lambda s: (
+            s.get("cloud_cover_pct") if s.get("cloud_cover_pct") is not None else 999,
+            -(int((s.get("acquisition_date") or "0000-00-00").replace("-", ""))),
+        ),
+    )
+    chosen = candidates[0]
     return {
         "success": True,
         "scene": chosen,
+        "candidates": candidates[:3],
         "search_meta": {
             "scene_count": result["scene_count"],
             "date_range": result["date_range"],

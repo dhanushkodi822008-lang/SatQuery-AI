@@ -94,6 +94,9 @@ def _read_band_window(
     bbox: List[float],
     max_size: int = 512,
     error_out: Optional[List[str]] = None,
+    reflectance_scale: Optional[float] = None,
+    reflectance_offset: float = 0.0,
+    target_resolution_m: float = 10.0,
 ) -> Optional[Tuple[np.ndarray, Dict[str, Any]]]:
     """
     Read a COG band clipped to bbox using rasterio windowed read.
@@ -103,7 +106,8 @@ def _read_band_window(
         import rasterio
         from rasterio.windows import from_bounds
         from rasterio.enums import Resampling
-        from rasterio.warp import transform_bounds
+        from rasterio.warp import reproject, transform_bounds
+        from rasterio.transform import from_bounds as transform_from_bounds
     except ImportError as e:
         logger.error(f"rasterio not available: {e}")
         if error_out is not None:
@@ -112,14 +116,28 @@ def _read_band_window(
 
     min_lon, min_lat, max_lon, max_lat = bbox
     try:
+        if (
+            len(bbox) != 4
+            or not all(np.isfinite(value) for value in bbox)
+            or max_lon <= min_lon
+            or max_lat <= min_lat
+        ):
+            raise ValueError("AOI bounds must be finite and have positive width and height.")
+        mid_lat = (min_lat + max_lat) / 2.0
+        width_m = (max_lon - min_lon) * 111_320.0 * max(0.01, np.cos(np.radians(mid_lat)))
+        height_m = (max_lat - min_lat) * 111_320.0
+        out_w = min(max_size, max(1, int(np.ceil(width_m / target_resolution_m))))
+        out_h = min(max_size, max(1, int(np.ceil(height_m / target_resolution_m))))
+        target_transform = transform_from_bounds(
+            min_lon, min_lat, max_lon, max_lat, out_w, out_h
+        )
+        output = np.full((out_h, out_w), np.nan, dtype=np.float32)
         with rasterio.open(href) as src:
-            # Transform AOI to raster CRS if needed
-            try:
-                left, bottom, right, top = transform_bounds(
-                    "EPSG:4326", src.crs, min_lon, min_lat, max_lon, max_lat
-                )
-            except Exception:
-                left, bottom, right, top = min_lon, min_lat, max_lon, max_lat
+            if src.crs is None or src.transform == rasterio.Affine.identity():
+                raise ValueError("Satellite band has no valid CRS or geotransform.")
+            left, bottom, right, top = transform_bounds(
+                "EPSG:4326", src.crs, min_lon, min_lat, max_lon, max_lat
+            )
 
             window = from_bounds(left, bottom, right, top, src.transform)
             window = window.intersection(
@@ -131,37 +149,40 @@ def _read_band_window(
                     error_out.append("AOI does not intersect the asset extent")
                 return None
 
-            # Downsample large windows for performance
-            out_h = int(window.height)
-            out_w = int(window.width)
-            if max(out_h, out_w) > max_size:
-                scale = max_size / max(out_h, out_w)
-                out_h = max(1, int(out_h * scale))
-                out_w = max(1, int(out_w * scale))
-
-            data = src.read(
-                1,
-                window=window,
-                out_shape=(out_h, out_w),
+            source = src.read(1, window=window, masked=True)
+            source_data = np.asarray(source.filled(np.nan), dtype=np.float32)
+            reproject(
+                source=source_data,
+                destination=output,
+                src_transform=src.window_transform(window),
+                src_crs=src.crs,
+                src_nodata=np.nan,
+                dst_transform=target_transform,
+                dst_crs="EPSG:4326",
+                dst_nodata=np.nan,
                 resampling=Resampling.bilinear,
-                boundless=True,
-                fill_value=0,
             )
-            data = np.asarray(data, dtype=np.float32)
-
-            # Sentinel-2 L2A often scaled reflectance * 10000
-            if data.max() > 1.5:
-                data = data / 10000.0
-                data = np.clip(data, 0, 1)
+            dataset_scale = src.scales[0] if src.scales else 1.0
+            dataset_offset = src.offsets[0] if src.offsets else 0.0
+            if reflectance_scale is not None and dataset_scale == 1.0 and dataset_offset == 0.0:
+                scale = reflectance_scale
+                offset = reflectance_offset
+            else:
+                scale = dataset_scale
+                offset = dataset_offset
+            output = output * scale + offset
+            if scale == 1.0 and np.isfinite(output).any() and np.nanmax(output) > 1.5:
+                output /= 10000.0
+            output = np.where(np.isfinite(output), np.clip(output, 0.0, 1.0), np.nan)
 
             meta = {
                 "crs": str(src.crs),
-                "dtype": str(data.dtype),
-                "shape": list(data.shape),
+                "dtype": str(output.dtype),
+                "shape": list(output.shape),
                 "nodata": src.nodata,
-                "resolution_approx_m": None,
+                "transform": tuple(target_transform),
             }
-            return data, meta
+            return output, meta
     except Exception as e:
         logger.warning(f"Band read failed ({href[:80]}...): {e}")
         if error_out is not None:
@@ -231,7 +252,16 @@ def fetch_optical_bands(
             scene.get("id"), logical, selected_key, signed_assets,
         )
         read_reason: List[str] = []
-        result = _read_band_window(href, bbox, error_out=read_reason)
+        scale = 2.75e-5 if "landsat-c2-l2" in collection else None
+        offset = -0.2 if "landsat-c2-l2" in collection else 0.0
+        result = _read_band_window(
+            href,
+            bbox,
+            error_out=read_reason,
+            reflectance_scale=scale,
+            reflectance_offset=offset,
+            target_resolution_m=float(scene.get("resolution_m") or 10),
+        )
         if result is None:
             missing.append(logical)
             reason = read_reason[0] if read_reason else "unknown raster access error"
@@ -267,12 +297,19 @@ def fetch_optical_bands(
             ),
         }
 
-    # Align shapes (crop to min common)
+    # Bands are resampled to the same geographic grid before they are combined.
     shapes = [b.shape for b in bands.values()]
-    min_h = min(s[0] for s in shapes)
-    min_w = min(s[1] for s in shapes)
-    for k in list(bands.keys()):
-        bands[k] = bands[k][:min_h, :min_w]
+    if any(band_shape != shapes[0] for band_shape in shapes[1:]):
+        return {
+            "success": False,
+            "error": "Satellite bands could not be aligned to a common AOI grid.",
+            "missing": missing,
+            "mode": "GRID_MISMATCH",
+            "asset_details": asset_details,
+            "signing_error": signing_error,
+            "read_errors": read_errors,
+        }
+    min_h, min_w = shapes[0]
 
     return {
         "success": True,
